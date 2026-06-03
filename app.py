@@ -46,6 +46,19 @@ INITIAL_ITEMS = [
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="")
 
 
+# 問題4: 未処理例外をJSONで返す（フロントのalert(data.error)が空になる問題を解消）
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    app.logger.error(traceback.format_exc())
+    return jsonify({"error": "サーバーエラーが発生しました"}), 500
+
+
+@app.errorhandler(404)
+def handle_404(e):
+    return jsonify({"error": "Not found"}), 404
+
+
 # ── DB接続 ───────────────────────────────
 
 class PGWrapper:
@@ -59,22 +72,27 @@ class PGWrapper:
         return cur  # fetchone/fetchall後は呼び出し元でcloseを想定
 
     def fetchone(self, sql: str, params=()):
+        # bug17: try/finallyでDBエラー時もカーソルを確実に閉じる
         cur = self.execute(sql, params)
-        row = cur.fetchone()
-        cur.close()
-        return row
+        try:
+            return cur.fetchone()
+        finally:
+            cur.close()
 
     def fetchall(self, sql: str, params=()):
         cur = self.execute(sql, params)
-        rows = cur.fetchall()
-        cur.close()
-        return rows
+        try:
+            return cur.fetchall()
+        finally:
+            cur.close()
 
     def run(self, sql: str, params=()):
         """結果を返さないDML用。"""
         cur = self._conn.cursor()
-        cur.execute(sql, params or ())
-        cur.close()
+        try:
+            cur.execute(sql, params or ())
+        finally:
+            cur.close()
 
     def executemany(self, sql: str, params_list):
         cur = self._conn.cursor(cursor_factory=RealDictCursor)
@@ -258,10 +276,17 @@ def patch_item(iid):
     """週平均デフォルト値の更新用。"""
     ensure_db()
     data = request.get_json(force=True)
-    default_avg = float(data.get("default_weekly_avg") or 0)
+    try:
+        default_avg = float(data.get("default_weekly_avg") or 0)
+    except (ValueError, TypeError):
+        return jsonify({"error": "週平均の値が不正です"}), 400
     if default_avg < 0:
         return jsonify({"error": "週平均は0以上で入力してください"}), 400
     with conn() as c:
+        # bug19: 削除済み品目へのPATCHを防ぐ
+        item = c.fetchone("SELECT id FROM items WHERE id=%s AND active=1", (iid,))
+        if not item:
+            return jsonify({"error": "品目が見つかりません"}), 404
         c.run("UPDATE items SET default_weekly_avg=%s WHERE id=%s", (default_avg, iid))
     return jsonify({"ok": True})
 
@@ -315,7 +340,11 @@ def create_transaction():
 def list_transactions():
     ensure_db()
     item_id = request.args.get("item_id")
-    limit = min(int(request.args.get("limit") or 200), 500)
+    # bug20: 不正な limit 値（文字列など）で ValueError → 400 を返す
+    try:
+        limit = min(int(request.args.get("limit") or 200), 500)
+    except (ValueError, TypeError):
+        return jsonify({"error": "limitの値が不正です"}), 400
     with conn() as c:
         # bug6: INNER JOIN → LEFT JOIN（削除済み品目の履歴も消えないようにする）
         if item_id:
