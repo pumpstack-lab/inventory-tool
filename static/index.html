@@ -82,6 +82,11 @@
       <label class="form-label">現在の在庫数</label>
       <input type="number" class="form-input" id="new-item-stock" min="0" value="0" />
     </div>
+    <div class="form-group">
+      <label class="form-label">週平均払出数（目安・任意）</label>
+      <input type="number" class="form-input" id="new-item-avg" min="0" step="0.1" value="0" placeholder="例: 2" />
+      <p style="font-size:11px;color:var(--muted);margin-top:4px">履歴がない期間のアラート判定に使います</p>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-primary" style="flex:1" onclick="submitAddItem()">追加する</button>
       <button class="btn btn-ghost" onclick="closeModal('modal-add-item')">キャンセル</button>

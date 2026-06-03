@@ -175,6 +175,7 @@ document.getElementById("btn-open-add-item").addEventListener("click", () => {
   document.getElementById("new-item-name").value = "";
   document.getElementById("new-item-unit").value = "個";
   document.getElementById("new-item-stock").value = "0";
+  document.getElementById("new-item-avg").value = "0";
   openModal("modal-add-item");
 });
 
@@ -182,11 +183,12 @@ async function submitAddItem() {
   const name = document.getElementById("new-item-name").value.trim();
   const unit = document.getElementById("new-item-unit").value.trim() || "個";
   const stock = parseInt(document.getElementById("new-item-stock").value || "0");
+  const defaultAvg = parseFloat(document.getElementById("new-item-avg").value || "0");
   if (!name) { alert("品名を入力してください"); return; }
   const res = await fetch("/api/items", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, unit, current_stock: stock }),
+    body: JSON.stringify({ name, unit, current_stock: stock, default_weekly_avg: defaultAvg }),
   });
   const data = await res.json();
   if (!res.ok) { alert(data.error || "追加に失敗しました"); return; }
@@ -248,6 +250,9 @@ async function deleteStaff(id) {
   await fetch(`/api/staff/${id}`, { method: "DELETE" });
   await loadStaff();
   renderStaffManage();
+  // bug9: 削除した担当者が選択中だったらリセット
+  const stillExists = staffList.some(s => s.name === selectedStaff);
+  if (!stillExists) selectedStaff = "";
 }
 
 // ── 検索 ──────────────────────────────

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg2
@@ -46,25 +46,40 @@ INITIAL_ITEMS = [
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="")
 
 
+# ── DB接続 ───────────────────────────────
+
 class PGWrapper:
     def __init__(self, dsn: str):
         self._conn = psycopg2.connect(dsn)
 
     def execute(self, sql: str, params=()):
+        # bug5/7: カーソルを毎回閉じて確実にリソースを解放
         cur = self._conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(sql, params or ())
-        return cur
+        return cur  # fetchone/fetchall後は呼び出し元でcloseを想定
+
+    def fetchone(self, sql: str, params=()):
+        cur = self.execute(sql, params)
+        row = cur.fetchone()
+        cur.close()
+        return row
+
+    def fetchall(self, sql: str, params=()):
+        cur = self.execute(sql, params)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def run(self, sql: str, params=()):
+        """結果を返さないDML用。"""
+        cur = self._conn.cursor()
+        cur.execute(sql, params or ())
+        cur.close()
 
     def executemany(self, sql: str, params_list):
         cur = self._conn.cursor(cursor_factory=RealDictCursor)
         execute_batch(cur, sql, params_list)
         cur.close()
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
 
     def __enter__(self):
         return self
@@ -88,16 +103,17 @@ DB_READY = False
 
 def init_db():
     with conn() as c:
-        c.execute("""CREATE TABLE IF NOT EXISTS items (
+        c.run("""CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             current_stock INTEGER NOT NULL DEFAULT 0,
             unit TEXT NOT NULL DEFAULT '個',
+            default_weekly_avg REAL DEFAULT 0,
             sort_order INTEGER DEFAULT 0,
             active INTEGER DEFAULT 1,
             created_at TEXT NOT NULL
         )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS transactions (
+        c.run("""CREATE TABLE IF NOT EXISTS transactions (
             id TEXT PRIMARY KEY,
             item_id TEXT NOT NULL,
             type TEXT NOT NULL,
@@ -106,23 +122,33 @@ def init_db():
             note TEXT,
             recorded_at TEXT NOT NULL
         )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS staff (
+        c.run("""CREATE TABLE IF NOT EXISTS staff (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             active INTEGER DEFAULT 1,
             created_at TEXT NOT NULL
         )""")
-        # 初期アイテムを投入
-        if c.execute("SELECT COUNT(*) FROM items").fetchone()["count"] == 0:
+        ensure_items_columns(c)
+        count = c.fetchone("SELECT COUNT(*) FROM items")["count"]
+        if count == 0:
             now = datetime.now().isoformat(timespec="seconds")
             rows = [
-                (str(uuid.uuid4()), name, 0, "個", i, 1, now)
+                (str(uuid.uuid4()), name, 0, "個", 0, i, 1, now)
                 for i, name in enumerate(INITIAL_ITEMS)
             ]
             c.executemany(
-                "INSERT INTO items (id,name,current_stock,unit,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                "INSERT INTO items (id,name,current_stock,unit,default_weekly_avg,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 rows,
             )
+
+
+def ensure_items_columns(c: PGWrapper) -> None:
+    """既存DBにdefault_weekly_avgカラムがなければ追加。"""
+    cols = {r["column_name"] for r in c.fetchall(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='items'"
+    )}
+    if "default_weekly_avg" not in cols:
+        c.run("ALTER TABLE items ADD COLUMN IF NOT EXISTS default_weekly_avg REAL DEFAULT 0")
 
 
 def ensure_db():
@@ -133,21 +159,25 @@ def ensure_db():
     DB_READY = True
 
 
-def calc_weekly_avg(item_id: str, c: PGWrapper) -> float:
-    """過去28日間の払出数量から週平均払出数を計算する。"""
+# ── ビジネスロジック ─────────────────────
+
+def calc_weekly_avg(item_id: str, default_avg: float, c: PGWrapper) -> float:
+    """過去28日間の払出から週平均を計算。履歴がなければdefault_avgを使う。"""
     since = (datetime.now() - timedelta(days=28)).isoformat()
-    row = c.execute(
-        """SELECT COALESCE(SUM(quantity), 0) AS total
-           FROM transactions
-           WHERE item_id=%s AND type='out' AND recorded_at >= %s""",
+    row = c.fetchone(
+        "SELECT COALESCE(SUM(quantity), 0) AS total FROM transactions WHERE item_id=%s AND type='out' AND recorded_at >= %s",
         (item_id, since),
-    ).fetchone()
+    )
     total = int(row["total"] or 0)
-    return round(total / 4, 2)  # 4週分
+    if total > 0:
+        return round(total / 4, 2)
+    # 履歴がない場合はdefault_weekly_avgにフォールバック
+    return float(default_avg or 0)
 
 
 def calc_alert_level(stock: int, weekly_avg: float) -> str:
-    """0=正常 1=黄色（1ヶ月以内に切れる） 2=赤（2週間以内に切れる）"""
+    if stock == 0:
+        return "red"
     if weekly_avg <= 0:
         return "normal"
     weeks_left = stock / weekly_avg
@@ -158,7 +188,7 @@ def calc_alert_level(stock: int, weekly_avg: float) -> str:
     return "normal"
 
 
-# ── ルート ─────────────────────────────
+# ── ルート ───────────────────────────────
 
 @app.route("/")
 def index():
@@ -176,14 +206,12 @@ def detail():
 def list_items():
     ensure_db()
     with conn() as c:
-        items = [dict(r) for r in c.execute(
-            "SELECT * FROM items WHERE active=1 ORDER BY sort_order, name"
-        )]
+        items = c.fetchall("SELECT * FROM items WHERE active=1 ORDER BY sort_order, name")
         result = []
         for item in items:
-            weekly_avg = calc_weekly_avg(item["id"], c)
+            weekly_avg = calc_weekly_avg(item["id"], item.get("default_weekly_avg") or 0, c)
             alert = calc_alert_level(int(item["current_stock"]), weekly_avg)
-            result.append({**item, "weekly_avg": weekly_avg, "alert": alert})
+            result.append({**dict(item), "weekly_avg": weekly_avg, "alert": alert})
     return jsonify({"items": result})
 
 
@@ -194,27 +222,46 @@ def create_item():
     name = (data.get("name") or "").strip()
     unit = (data.get("unit") or "個").strip()
     stock = int(data.get("current_stock") or 0)
+    default_avg = float(data.get("default_weekly_avg") or 0)
+    # bug8: 在庫数の負数バリデーション
     if not name:
         return jsonify({"error": "品名は必須です"}), 400
+    if stock < 0:
+        return jsonify({"error": "在庫数は0以上で入力してください"}), 400
+    if default_avg < 0:
+        return jsonify({"error": "週平均は0以上で入力してください"}), 400
     now = datetime.now().isoformat(timespec="seconds")
     iid = str(uuid.uuid4())
     with conn() as c:
-        max_order = c.execute("SELECT COALESCE(MAX(sort_order),0)+1 AS v FROM items").fetchone()["v"]
+        max_order = (c.fetchone("SELECT COALESCE(MAX(sort_order),0)+1 AS v FROM items") or {}).get("v", 0)
         try:
-            c.execute(
-                "INSERT INTO items (id,name,current_stock,unit,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,1,%s)",
-                (iid, name, stock, unit, max_order, now),
+            c.run(
+                "INSERT INTO items (id,name,current_stock,unit,default_weekly_avg,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,1,%s)",
+                (iid, name, stock, unit, default_avg, max_order, now),
             )
-        except Exception:
+        except psycopg2.errors.UniqueViolation:
             return jsonify({"error": "同じ品名が既に存在します"}), 409
     return jsonify({"id": iid})
+
+
+@app.route("/api/items/<iid>", methods=["PATCH"])
+def patch_item(iid):
+    """週平均デフォルト値の更新用。"""
+    ensure_db()
+    data = request.get_json(force=True)
+    default_avg = float(data.get("default_weekly_avg") or 0)
+    if default_avg < 0:
+        return jsonify({"error": "週平均は0以上で入力してください"}), 400
+    with conn() as c:
+        c.run("UPDATE items SET default_weekly_avg=%s WHERE id=%s", (default_avg, iid))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/items/<iid>", methods=["DELETE"])
 def delete_item(iid):
     ensure_db()
     with conn() as c:
-        c.execute("UPDATE items SET active=0 WHERE id=%s", (iid,))
+        c.run("UPDATE items SET active=0 WHERE id=%s", (iid,))
     return jsonify({"ok": True})
 
 
@@ -225,7 +272,7 @@ def create_transaction():
     ensure_db()
     data = request.get_json(force=True)
     item_id = (data.get("item_id") or "").strip()
-    tx_type = (data.get("type") or "").strip()  # "in" or "out"
+    tx_type = (data.get("type") or "").strip()
     quantity = int(data.get("quantity") or 0)
     staff_name = (data.get("staff_name") or "").strip()
     note = (data.get("note") or "").strip()
@@ -237,17 +284,21 @@ def create_transaction():
     tid = str(uuid.uuid4())
 
     with conn() as c:
-        item = c.execute("SELECT * FROM items WHERE id=%s AND active=1", (item_id,)).fetchone()
+        # 同時アクセス競合対策: FOR UPDATE で行ロック取得
+        item = c.fetchone(
+            "SELECT * FROM items WHERE id=%s AND active=1 FOR UPDATE",
+            (item_id,),
+        )
         if not item:
             return jsonify({"error": "品目が見つかりません"}), 404
         new_stock = int(item["current_stock"]) + (quantity if tx_type == "in" else -quantity)
         if new_stock < 0:
-            return jsonify({"error": "在庫が不足しています"}), 400
-        c.execute(
+            return jsonify({"error": f"在庫が不足しています（現在庫: {item['current_stock']}{item['unit']}）"}), 400
+        c.run(
             "INSERT INTO transactions (id,item_id,type,quantity,staff_name,note,recorded_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
             (tid, item_id, tx_type, quantity, staff_name, note, now),
         )
-        c.execute("UPDATE items SET current_stock=%s WHERE id=%s", (new_stock, item_id))
+        c.run("UPDATE items SET current_stock=%s WHERE id=%s", (new_stock, item_id))
     return jsonify({"id": tid, "new_stock": new_stock})
 
 
@@ -257,16 +308,24 @@ def list_transactions():
     item_id = request.args.get("item_id")
     limit = min(int(request.args.get("limit") or 200), 500)
     with conn() as c:
+        # bug6: INNER JOIN → LEFT JOIN（削除済み品目の履歴も消えないようにする）
         if item_id:
-            rows = list(c.execute(
-                "SELECT t.*, i.name as item_name FROM transactions t JOIN items i ON t.item_id=i.id WHERE t.item_id=%s ORDER BY t.recorded_at DESC LIMIT %s",
+            rows = c.fetchall(
+                """SELECT t.*, COALESCE(i.name, '削除済み品目') AS item_name
+                   FROM transactions t
+                   LEFT JOIN items i ON t.item_id=i.id
+                   WHERE t.item_id=%s
+                   ORDER BY t.recorded_at DESC LIMIT %s""",
                 (item_id, limit),
-            ))
+            )
         else:
-            rows = list(c.execute(
-                "SELECT t.*, i.name as item_name FROM transactions t JOIN items i ON t.item_id=i.id ORDER BY t.recorded_at DESC LIMIT %s",
+            rows = c.fetchall(
+                """SELECT t.*, COALESCE(i.name, '削除済み品目') AS item_name
+                   FROM transactions t
+                   LEFT JOIN items i ON t.item_id=i.id
+                   ORDER BY t.recorded_at DESC LIMIT %s""",
                 (limit,),
-            ))
+            )
     return jsonify({"transactions": [dict(r) for r in rows]})
 
 
@@ -276,7 +335,7 @@ def list_transactions():
 def list_staff():
     ensure_db()
     with conn() as c:
-        rows = list(c.execute("SELECT * FROM staff WHERE active=1 ORDER BY name"))
+        rows = c.fetchall("SELECT * FROM staff WHERE active=1 ORDER BY name")
     return jsonify({"staff": [dict(r) for r in rows]})
 
 
@@ -291,11 +350,11 @@ def create_staff():
     sid = str(uuid.uuid4())
     with conn() as c:
         try:
-            c.execute(
+            c.run(
                 "INSERT INTO staff (id,name,active,created_at) VALUES (%s,%s,1,%s)",
                 (sid, name, now),
             )
-        except Exception:
+        except psycopg2.errors.UniqueViolation:
             return jsonify({"error": "同じ名前が既に存在します"}), 409
     return jsonify({"id": sid})
 
@@ -304,7 +363,7 @@ def create_staff():
 def delete_staff(sid):
     ensure_db()
     with conn() as c:
-        c.execute("UPDATE staff SET active=0 WHERE id=%s", (sid,))
+        c.run("UPDATE staff SET active=0 WHERE id=%s", (sid,))
     return jsonify({"ok": True})
 
 
