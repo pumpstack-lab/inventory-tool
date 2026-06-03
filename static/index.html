@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>在庫管理｜グループホーム</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <h1>📦 日用品在庫管理</h1>
+    <div class="header-sub">グループホーム</div>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-ghost btn-sm" id="btn-open-staff">担当者</button>
+    <button class="btn btn-accent btn-sm" id="btn-open-add-item">＋ 品目追加</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- 凡例 -->
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;font-size:12px;color:var(--muted)">
+    <span>🟡 1ヶ月以内に在庫切れ見込み</span>
+    <span>🔴 2週間以内に在庫切れ見込み</span>
+  </div>
+
+  <!-- 検索 -->
+  <div class="search-bar">
+    <input type="text" class="search-input" id="search-input" placeholder="品目を検索…" />
+  </div>
+
+  <!-- アイテム一覧 -->
+  <div id="item-grid" class="item-grid"></div>
+  <p id="empty-msg" class="hidden" style="text-align:center;color:var(--muted);padding:40px 0">品目がありません</p>
+</main>
+
+<!-- フラッシュ -->
+<div class="flash" id="flash"></div>
+
+<!-- 受払モーダル -->
+<div class="modal-backdrop hidden" id="modal-tx">
+  <div class="modal">
+    <div class="modal-title" id="tx-modal-title">受払登録</div>
+    <div class="type-group">
+      <button class="type-btn" id="type-in" onclick="selectType('in')">📥 入庫（受）</button>
+      <button class="type-btn" id="type-out" onclick="selectType('out')">📤 払出（払）</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">数量</label>
+      <input type="number" class="form-input" id="tx-qty" min="1" value="1" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">担当者</label>
+      <div class="staff-list" id="staff-chips-tx"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">メモ（任意）</label>
+      <textarea class="form-textarea" id="tx-note" placeholder="例：〇〇で購入、など" rows="2"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" style="flex:1" onclick="submitTx()">登録する</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-tx')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- 品目追加モーダル -->
+<div class="modal-backdrop hidden" id="modal-add-item">
+  <div class="modal">
+    <div class="modal-title">品目を追加</div>
+    <div class="form-group">
+      <label class="form-label">品名</label>
+      <input type="text" class="form-input" id="new-item-name" placeholder="例：マスク" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">単位</label>
+      <input type="text" class="form-input" id="new-item-unit" placeholder="個・箱・袋 など" value="個" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">現在の在庫数</label>
+      <input type="number" class="form-input" id="new-item-stock" min="0" value="0" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" style="flex:1" onclick="submitAddItem()">追加する</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-add-item')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- 担当者管理モーダル -->
+<div class="modal-backdrop hidden" id="modal-staff">
+  <div class="modal">
+    <div class="modal-title">担当者管理</div>
+    <div class="staff-list" id="staff-list-manage"></div>
+    <div class="form-group" style="display:flex;gap:8px;margin-top:8px">
+      <input type="text" class="form-input" id="new-staff-name" placeholder="担当者名を入力" style="flex:1" />
+      <button class="btn btn-primary" onclick="submitAddStaff()">追加</button>
+    </div>
+    <div style="margin-top:14px;text-align:right">
+      <button class="btn btn-ghost" onclick="closeModal('modal-staff')">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/main.js"></script>
+</body>
+</html>

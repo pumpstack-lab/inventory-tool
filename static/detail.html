@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>受払履歴</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <h1 id="page-title">受払履歴</h1>
+    <div class="header-sub" id="page-sub">読み込み中…</div>
+  </div>
+  <div class="header-actions">
+    <a href="/" class="btn btn-ghost btn-sm">← 一覧</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- サマリ -->
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">現在庫</div>
+        <div style="font-size:24px;font-weight:800" id="detail-stock">―</div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">週平均払出</div>
+        <div style="font-size:20px;font-weight:800" id="detail-avg">―</div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">残余週数</div>
+        <div style="font-size:20px;font-weight:800" id="detail-weeks">―</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- エクセル出力 -->
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button class="btn btn-ghost btn-sm" onclick="exportCSV()">📥 CSV出力（Excel対応）</button>
+  </div>
+
+  <!-- 履歴テーブル -->
+  <div class="card">
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>区分</th>
+            <th>数量</th>
+            <th>担当者</th>
+            <th>メモ</th>
+          </tr>
+        </thead>
+        <tbody id="tx-tbody">
+          <tr><td colspan="5" style="text-align:center;padding:24px;color:var(--muted)">読み込み中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const params = new URLSearchParams(location.search);
+const itemId = params.get("id");
+let txData = [];
+let itemInfo = null;
+
+async function init() {
+  if (!itemId) { document.getElementById("page-sub").textContent = "品目IDが指定されていません"; return; }
+
+  const [itemsRes, txRes] = await Promise.all([
+    fetch("/api/items"),
+    fetch(`/api/transactions?item_id=${itemId}&limit=500`),
+  ]);
+  const itemsData = await itemsRes.json();
+  const txJson = await txRes.json();
+
+  itemInfo = (itemsData.items || []).find(i => i.id === itemId);
+  txData = txJson.transactions || [];
+
+  if (itemInfo) {
+    document.title = `${itemInfo.name}｜受払履歴`;
+    document.getElementById("page-title").textContent = itemInfo.name;
+    document.getElementById("page-sub").textContent = "受払履歴";
+    document.getElementById("detail-stock").textContent = `${itemInfo.current_stock}${itemInfo.unit}`;
+    const avg = itemInfo.weekly_avg;
+    document.getElementById("detail-avg").textContent = avg > 0 ? `${avg.toFixed(1)}${itemInfo.unit}/週` : "―";
+    document.getElementById("detail-weeks").textContent = avg > 0 ? `${Math.floor(itemInfo.current_stock / avg)}週` : "―";
+  }
+
+  renderTable();
+}
+
+function renderTable() {
+  const tbody = document.getElementById("tx-tbody");
+  if (!txData.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--muted)">履歴がありません</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = txData.map(tx => {
+    const typeLabel = tx.type === "in"
+      ? `<span class="tx-in">入庫</span>`
+      : `<span class="tx-out">払出</span>`;
+    const qty = tx.type === "in"
+      ? `<span class="tx-in">+${tx.quantity}</span>`
+      : `<span class="tx-out">-${tx.quantity}</span>`;
+    const dt = tx.recorded_at.slice(0, 16).replace("T", " ");
+    return `<tr>
+      <td style="white-space:nowrap">${dt}</td>
+      <td>${typeLabel}</td>
+      <td>${qty}</td>
+      <td>${escHtml(tx.staff_name || "―")}</td>
+      <td>${escHtml(tx.note || "")}</td>
+    </tr>`;
+  }).join("");
+}
+
+function exportCSV() {
+  const name = itemInfo?.name || "item";
+  const unit = itemInfo?.unit || "";
+  const rows = [["日時", "区分", `数量(${unit})`, "担当者", "メモ"]];
+  txData.forEach(tx => {
+    rows.push([
+      tx.recorded_at.slice(0, 16).replace("T", " "),
+      tx.type === "in" ? "入庫" : "払出",
+      tx.type === "in" ? tx.quantity : -tx.quantity,
+      tx.staff_name || "",
+      tx.note || "",
+    ]);
+  });
+  const bom = "﻿";
+  const csv = bom + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name}_受払履歴_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+init();
+</script>
+</body>
+</html>
