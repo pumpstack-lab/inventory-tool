@@ -1,7 +1,7 @@
 let items = [];
 let staffList = [];
 let selectedItemId = null;
-let selectedType = "out";
+let txType = "out";        // bug1: selectedTypeから改名（関数名と競合回避）
 let selectedStaff = "";
 
 // ── 初期化 ────────────────────────────
@@ -42,13 +42,25 @@ function renderItems() {
   empty.classList.add("hidden");
 
   grid.innerHTML = filtered.map(it => {
-    const alertClass = it.alert === "red" ? "alert-red" : it.alert === "yellow" ? "alert-yellow" : "";
-    const badge = it.alert === "red"
+    // 在庫0は履歴がなくてもバッジ表示
+    const isZero = it.current_stock === 0;
+    const alertLevel = isZero ? "zero" : it.alert;
+    const alertClass = alertLevel === "zero" ? "alert-red"
+      : alertLevel === "red" ? "alert-red"
+      : alertLevel === "yellow" ? "alert-yellow" : "";
+    const badge = alertLevel === "zero"
+      ? `<span class="alert-badge red">🔴 在庫なし</span>`
+      : alertLevel === "red"
       ? `<span class="alert-badge red">🔴 2週間以内</span>`
-      : it.alert === "yellow"
+      : alertLevel === "yellow"
       ? `<span class="alert-badge yellow">🟡 1ヶ月以内</span>`
       : "";
     const weeklyAvg = it.weekly_avg > 0 ? it.weekly_avg.toFixed(1) : "―";
+    const weeksLeft = it.weekly_avg > 0
+      ? Math.floor(it.current_stock / it.weekly_avg) + "週"
+      : "―";
+
+    // bug4: onclick属性でのsafeな渡し方（data属性経由）
     return `
       <div class="item-card ${alertClass}" data-id="${it.id}">
         <div class="item-name">${escHtml(it.name)} ${badge}</div>
@@ -63,16 +75,24 @@ function renderItems() {
           </div>
           <div class="stat-box">
             <div class="stat-label">残余週数</div>
-            <div class="stat-value" style="font-size:15px">${it.weekly_avg > 0 ? Math.floor(it.current_stock / it.weekly_avg) + '週' : '―'}</div>
+            <div class="stat-value" style="font-size:15px">${weeksLeft}</div>
           </div>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary btn-sm" onclick="openTx('${it.id}')">受払登録</button>
+          <button class="btn btn-primary btn-sm js-open-tx" data-id="${it.id}">受払登録</button>
           <a class="btn btn-ghost btn-sm" href="/detail?id=${it.id}">履歴</a>
-          <button class="btn btn-icon" onclick="confirmDeleteItem('${it.id}', '${escHtml(it.name)}')" title="削除">🗑</button>
+          <button class="btn btn-icon js-delete-item" data-id="${it.id}" data-name="${escHtml(it.name)}" title="削除">🗑</button>
         </div>
       </div>`;
   }).join("");
+
+  // イベント委譲（onclick属性を使わない）
+  grid.querySelectorAll(".js-open-tx").forEach(btn => {
+    btn.addEventListener("click", () => openTx(btn.dataset.id));
+  });
+  grid.querySelectorAll(".js-delete-item").forEach(btn => {
+    btn.addEventListener("click", () => confirmDeleteItem(btn.dataset.id, btn.dataset.name));
+  });
 }
 
 // ── 受払モーダル ──────────────────────
@@ -83,39 +103,42 @@ function openTx(itemId) {
   document.getElementById("tx-modal-title").textContent = `受払登録：${item?.name || ""}`;
   document.getElementById("tx-qty").value = 1;
   document.getElementById("tx-note").value = "";
-  selectedType = "out";
+  txType = "out";
   selectedStaff = "";
   renderTypeButtons();
   renderStaffChips("staff-chips-tx");
   openModal("modal-tx");
 }
 
-function selectType(type) {
-  selectedType = type;
+// bug1: 関数名を setTxType に変更（変数名 txType と競合しない）
+function setTxType(type) {
+  txType = type;
   renderTypeButtons();
 }
 
 function renderTypeButtons() {
   document.getElementById("type-in").className =
-    "type-btn" + (selectedType === "in" ? " selected-in" : "");
+    "type-btn" + (txType === "in" ? " selected-in" : "");
   document.getElementById("type-out").className =
-    "type-btn" + (selectedType === "out" ? " selected-out" : "");
+    "type-btn" + (txType === "out" ? " selected-out" : "");
 }
 
 function renderStaffChips(containerId) {
   const el = document.getElementById(containerId);
   if (!staffList.length) {
-    el.innerHTML = `<span style="font-size:13px;color:var(--muted)">担当者を先に登録してください</span>`;
+    el.innerHTML = `<span style="font-size:13px;color:var(--muted)">ヘッダーの「担当者」から先に登録してください</span>`;
     return;
   }
+  // bug4: data属性経由でイベント設定（onclick属性のアポストロフィ問題を回避）
   el.innerHTML = staffList.map(s =>
-    `<div class="staff-chip ${selectedStaff === s.name ? 'selected' : ''}" onclick="selectStaff('${escHtml(s.name)}','${containerId}')">${escHtml(s.name)}</div>`
+    `<div class="staff-chip ${selectedStaff === s.name ? 'selected' : ''}" data-name="${escHtml(s.name)}" data-container="${containerId}">${escHtml(s.name)}</div>`
   ).join("");
-}
-
-function selectStaff(name, containerId) {
-  selectedStaff = selectedStaff === name ? "" : name;
-  renderStaffChips(containerId);
+  el.querySelectorAll(".staff-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      selectedStaff = selectedStaff === chip.dataset.name ? "" : chip.dataset.name;
+      renderStaffChips(containerId);
+    });
+  });
 }
 
 async function submitTx() {
@@ -123,13 +146,17 @@ async function submitTx() {
   const note = document.getElementById("tx-note").value.trim();
   if (!selectedItemId) return;
   if (qty <= 0) { alert("数量を入力してください"); return; }
+  // 担当者未選択を警告（必須ではないが確認）
+  if (!selectedStaff) {
+    if (!confirm("担当者が選択されていません。このまま登録しますか？")) return;
+  }
 
   const res = await fetch("/api/transactions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       item_id: selectedItemId,
-      type: selectedType,
+      type: txType,
       quantity: qty,
       staff_name: selectedStaff,
       note,
@@ -138,7 +165,7 @@ async function submitTx() {
   const data = await res.json();
   if (!res.ok) { alert(data.error || "登録に失敗しました"); return; }
   closeModal("modal-tx");
-  flash(selectedType === "in" ? "入庫を登録しました" : "払出を登録しました");
+  flash(txType === "in" ? "入庫を登録しました" : "払出を登録しました");
   await loadItems();
 }
 
@@ -188,12 +215,16 @@ function renderStaffManage() {
     el.innerHTML = `<p style="font-size:13px;color:var(--muted)">担当者が登録されていません</p>`;
     return;
   }
+  // bug4: data属性経由でイベント設定
   el.innerHTML = staffList.map(s =>
     `<div class="staff-chip">
       ${escHtml(s.name)}
-      <button class="staff-chip-del" onclick="deleteStaff('${s.id}')" title="削除">✕</button>
+      <button class="staff-chip-del js-del-staff" data-id="${s.id}" title="削除">✕</button>
     </div>`
   ).join("");
+  el.querySelectorAll(".js-del-staff").forEach(btn => {
+    btn.addEventListener("click", () => deleteStaff(btn.dataset.id));
+  });
 }
 
 async function submitAddStaff() {
@@ -249,7 +280,8 @@ function escHtml(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");   // bug4: アポストロフィもエスケープ
 }
 
 init();

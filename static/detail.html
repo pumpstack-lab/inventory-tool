@@ -68,6 +68,7 @@ const params = new URLSearchParams(location.search);
 const itemId = params.get("id");
 let txData = [];
 let itemInfo = null;
+let displayName = "受払履歴";
 
 async function init() {
   if (!itemId) { document.getElementById("page-sub").textContent = "品目IDが指定されていません"; return; }
@@ -79,17 +80,27 @@ async function init() {
   const itemsData = await itemsRes.json();
   const txJson = await txRes.json();
 
+  // bug2: active=0（削除済み）の品目もtransactionsのitem_nameから取得して対応
   itemInfo = (itemsData.items || []).find(i => i.id === itemId);
   txData = txJson.transactions || [];
 
+  // 削除済み品目でも履歴のitem_nameから名前を取得して表示する
+  displayName = itemInfo?.name || txData[0]?.item_name || "削除済み品目";
+  const unit = itemInfo?.unit || "";
+
+  document.title = `${displayName}｜受払履歴`;
+  document.getElementById("page-title").textContent = displayName;
+  document.getElementById("page-sub").textContent = itemInfo ? "受払履歴" : "受払履歴（削除済み品目）";
+
   if (itemInfo) {
-    document.title = `${itemInfo.name}｜受払履歴`;
-    document.getElementById("page-title").textContent = itemInfo.name;
-    document.getElementById("page-sub").textContent = "受払履歴";
-    document.getElementById("detail-stock").textContent = `${itemInfo.current_stock}${itemInfo.unit}`;
+    document.getElementById("detail-stock").textContent = `${itemInfo.current_stock}${unit}`;
     const avg = itemInfo.weekly_avg;
-    document.getElementById("detail-avg").textContent = avg > 0 ? `${avg.toFixed(1)}${itemInfo.unit}/週` : "―";
+    document.getElementById("detail-avg").textContent = avg > 0 ? `${avg.toFixed(1)}${unit}/週` : "―";
     document.getElementById("detail-weeks").textContent = avg > 0 ? `${Math.floor(itemInfo.current_stock / avg)}週` : "―";
+  } else {
+    document.getElementById("detail-stock").textContent = "―";
+    document.getElementById("detail-avg").textContent = "―";
+    document.getElementById("detail-weeks").textContent = "―";
   }
 
   renderTable();
@@ -138,7 +149,9 @@ function exportCSV() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${name}_受払履歴_${new Date().toISOString().slice(0,10)}.csv`;
+  // bug3: 括弧・記号をファイル名から除去してOS互換性を確保
+  const safeName = displayName.replace(/[\\/:*?"<>|()（）]/g, "_");
+  a.download = `${safeName}_受払履歴_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
