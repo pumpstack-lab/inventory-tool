@@ -76,6 +76,7 @@ def client(monkeypatch):
 
         def run(self, sql, params=()):
             db.execute(_pg2sq_ext(sql), params or ())
+            db.commit()  # SQLiteはautocommitでないため即コミット
 
         def executemany(self, sql, params_list):
             db.executemany(_pg2sq_ext(sql), params_list)
@@ -90,6 +91,7 @@ def client(monkeypatch):
     monkeypatch.setattr(M, "DB_READY", False)
     # ensure_items_columns は information_schema を使うためSQLiteでは動かない → ノーオプで差し替え
     monkeypatch.setattr(M, "ensure_items_columns", lambda c: None)
+    monkeypatch.setattr(M, "ensure_transactions_columns", lambda c: None)
     M.app.config["TESTING"] = True
 
     with M.app.test_client() as c:

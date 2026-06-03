@@ -182,6 +182,34 @@ class TestTransactions:
         r = client.get("/api/transactions?limit=9999")
         assert r.status_code == 200
 
+    def test_home_name_and_date_stored(self, client):
+        """ホーム名・日付が正しく登録されること。"""
+        iid = first_item_id(client)
+        post(client, "/api/transactions", {"item_id": iid, "type": "in", "quantity": 10, "staff_name": ""})
+        r = post(client, "/api/transactions", {
+            "item_id": iid,
+            "type": "out",
+            "quantity": 2,
+            "staff_name": "田中",
+            "home_name": "こもれびホーム４",
+            "transaction_date": "2026-06-03",
+        })
+        assert r.status_code == 200
+        txs = client.get(f"/api/transactions?item_id={iid}").get_json()["transactions"]
+        # 払出レコードを特定（type='out'のもの）
+        out_tx = next((t for t in txs if t["type"] == "out"), None)
+        assert out_tx is not None
+        assert out_tx["home_name"] == "こもれびホーム４"
+        assert out_tx["transaction_date"] == "2026-06-03"
+
+    def test_transaction_date_defaults_to_today(self, client):
+        """日付未指定の場合、当日がセットされること。"""
+        from datetime import date
+        iid = first_item_id(client)
+        post(client, "/api/transactions", {"item_id": iid, "type": "in", "quantity": 5, "staff_name": ""})
+        txs = client.get(f"/api/transactions?item_id={iid}").get_json()["transactions"]
+        assert txs[0]["transaction_date"] == date.today().isoformat()
+
 
 # ── スタッフAPI ──────────────────────────────────────────────────────────────
 

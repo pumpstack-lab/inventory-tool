@@ -156,13 +156,16 @@ async function submitTx() {
   const note = document.getElementById("tx-note").value.trim();
   if (!selectedItemId) return;
   if (qty <= 0) { alert("数量を入力してください"); return; }
+  const home_name = document.getElementById("tx-home").value;
+  if (!home_name) {
+    if (!confirm("ホームが選択されていません。このまま登録しますか？")) return;
+  }
   // 担当者未選択を警告（必須ではないが確認）
   if (!selectedStaff) {
     if (!confirm("担当者が選択されていません。このまま登録しますか？")) return;
   }
 
   const transaction_date = document.getElementById("tx-date").value.trim();
-  const home_name = document.getElementById("tx-home").value;
   const res = await fetch("/api/transactions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
