@@ -161,18 +161,20 @@ def ensure_db():
 
 # ── ビジネスロジック ─────────────────────
 
-def calc_weekly_avg(item_id: str, default_avg: float, c: PGWrapper) -> float:
-    """過去28日間の払出から週平均を計算。履歴がなければdefault_avgを使う。"""
+def bulk_weekly_avg(item_ids: list[str], c: PGWrapper) -> dict[str, float]:
+    """bug12: 全品目の週平均を1クエリで取得してN+1を解消。"""
+    if not item_ids:
+        return {}
     since = (datetime.now() - timedelta(days=28)).isoformat()
-    row = c.fetchone(
-        "SELECT COALESCE(SUM(quantity), 0) AS total FROM transactions WHERE item_id=%s AND type='out' AND recorded_at >= %s",
-        (item_id, since),
+    placeholders = ",".join(["%s"] * len(item_ids))
+    rows = c.fetchall(
+        f"""SELECT item_id, COALESCE(SUM(quantity), 0) AS total
+            FROM transactions
+            WHERE item_id IN ({placeholders}) AND type='out' AND recorded_at >= %s
+            GROUP BY item_id""",
+        (*item_ids, since),
     )
-    total = int(row["total"] or 0)
-    if total > 0:
-        return round(total / 4, 2)
-    # 履歴がない場合はdefault_weekly_avgにフォールバック
-    return float(default_avg or 0)
+    return {r["item_id"]: round(int(r["total"]) / 4, 2) for r in rows}
 
 
 def calc_alert_level(stock: int, weekly_avg: float) -> str:
@@ -207,9 +209,14 @@ def list_items():
     ensure_db()
     with conn() as c:
         items = c.fetchall("SELECT * FROM items WHERE active=1 ORDER BY sort_order, name")
+        item_ids = [item["id"] for item in items]
+        # bug12: 1クエリで全品目の週平均を取得
+        avg_map = bulk_weekly_avg(item_ids, c)
         result = []
         for item in items:
-            weekly_avg = calc_weekly_avg(item["id"], item.get("default_weekly_avg") or 0, c)
+            history_avg = avg_map.get(item["id"], 0.0)
+            # 履歴がなければdefault_weekly_avgにフォールバック（bug15: float()で型保証）
+            weekly_avg = history_avg if history_avg > 0 else float(item.get("default_weekly_avg") or 0)
             alert = calc_alert_level(int(item["current_stock"]), weekly_avg)
             result.append({**dict(item), "weekly_avg": weekly_avg, "alert": alert})
     return jsonify({"items": result})
@@ -232,15 +239,17 @@ def create_item():
         return jsonify({"error": "週平均は0以上で入力してください"}), 400
     now = datetime.now().isoformat(timespec="seconds")
     iid = str(uuid.uuid4())
+    # bug11: with ブロック内でexcept→returnするとrollbackが走らないため
+    #        事前に重複チェックしてから INSERT する
     with conn() as c:
-        max_order = (c.fetchone("SELECT COALESCE(MAX(sort_order),0)+1 AS v FROM items") or {}).get("v", 0)
-        try:
-            c.run(
-                "INSERT INTO items (id,name,current_stock,unit,default_weekly_avg,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,1,%s)",
-                (iid, name, stock, unit, default_avg, max_order, now),
-            )
-        except psycopg2.errors.UniqueViolation:
+        exists = c.fetchone("SELECT id FROM items WHERE name=%s", (name,))
+        if exists:
             return jsonify({"error": "同じ品名が既に存在します"}), 409
+        max_order = (c.fetchone("SELECT COALESCE(MAX(sort_order),0)+1 AS v FROM items") or {}).get("v", 0)
+        c.run(
+            "INSERT INTO items (id,name,current_stock,unit,default_weekly_avg,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,1,%s)",
+            (iid, name, stock, unit, default_avg, max_order, now),
+        )
     return jsonify({"id": iid})
 
 
@@ -348,14 +357,15 @@ def create_staff():
         return jsonify({"error": "担当者名は必須です"}), 400
     now = datetime.now().isoformat(timespec="seconds")
     sid = str(uuid.uuid4())
+    # bug11: 同上、事前チェックで rollback 漏れを回避
     with conn() as c:
-        try:
-            c.run(
-                "INSERT INTO staff (id,name,active,created_at) VALUES (%s,%s,1,%s)",
-                (sid, name, now),
-            )
-        except psycopg2.errors.UniqueViolation:
+        exists = c.fetchone("SELECT id FROM staff WHERE name=%s", (name,))
+        if exists:
             return jsonify({"error": "同じ名前が既に存在します"}), 409
+        c.run(
+            "INSERT INTO staff (id,name,active,created_at) VALUES (%s,%s,1,%s)",
+            (sid, name, now),
+        )
     return jsonify({"id": sid})
 
 

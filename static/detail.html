@@ -37,9 +37,16 @@
     </div>
   </div>
 
-  <!-- エクセル出力 -->
-  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button class="btn btn-ghost btn-sm" onclick="exportCSV()">📥 CSV出力（Excel対応）</button>
+  <!-- 週平均デフォルト変更 + エクセル出力 -->
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--muted)">週平均目安：</span>
+      <input type="number" id="avg-input" min="0" step="0.1" style="width:80px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:14px" disabled />
+      <span style="font-size:13px;color:var(--muted)" id="avg-unit"></span>
+      <button class="btn btn-accent btn-sm" id="btn-save-avg" onclick="saveDefaultAvg()" disabled>保存</button>
+    </div>
+    <!-- bug14: ロード完了前はdisabledにしておく -->
+    <button class="btn btn-ghost btn-sm" id="btn-csv" onclick="exportCSV()" disabled>📥 CSV出力（Excel対応）</button>
   </div>
 
   <!-- 履歴テーブル -->
@@ -97,13 +104,37 @@ async function init() {
     const avg = itemInfo.weekly_avg;
     document.getElementById("detail-avg").textContent = avg > 0 ? `${avg.toFixed(1)}${unit}/週` : "―";
     document.getElementById("detail-weeks").textContent = avg > 0 ? `${Math.floor(itemInfo.current_stock / avg)}週` : "―";
+
+    // 問題2: 週平均デフォルト変更UI を有効化
+    const avgInput = document.getElementById("avg-input");
+    avgInput.value = itemInfo.default_weekly_avg || 0;
+    avgInput.disabled = false;
+    document.getElementById("avg-unit").textContent = unit + "/週";
+    document.getElementById("btn-save-avg").disabled = false;
   } else {
     document.getElementById("detail-stock").textContent = "―";
     document.getElementById("detail-avg").textContent = "―";
     document.getElementById("detail-weeks").textContent = "―";
   }
 
+  // bug14: ロード完了後にCSVボタンを有効化
+  document.getElementById("btn-csv").disabled = false;
+
   renderTable();
+}
+
+async function saveDefaultAvg() {
+  const val = parseFloat(document.getElementById("avg-input").value || "0");
+  if (val < 0) { alert("0以上の数値を入力してください"); return; }
+  const res = await fetch(`/api/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ default_weekly_avg: val }),
+  });
+  if (!res.ok) { alert("保存に失敗しました"); return; }
+  const btn = document.getElementById("btn-save-avg");
+  btn.textContent = "✓ 保存済み";
+  setTimeout(() => { btn.textContent = "保存"; }, 2000);
 }
 
 function renderTable() {
