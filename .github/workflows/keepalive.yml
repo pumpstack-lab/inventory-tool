@@ -1,0 +1,13 @@
+name: Render Keepalive
+
+on:
+  schedule:
+    - cron: '0 6 */5 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping inventory-tool
+        run: curl -f https://inventory-tool-zbuj.onrender.com/api/items
