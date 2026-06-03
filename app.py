@@ -46,17 +46,19 @@ INITIAL_ITEMS = [
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="")
 
 
-# 問題4: 未処理例外をJSONで返す（フロントのalert(data.error)が空になる問題を解消）
+# bug23: HTTPExceptionは元のステータスコードで返す（abort()が握りつぶされる問題を解消）
+from werkzeug.exceptions import HTTPException
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(e):
+    return jsonify({"error": e.description}), e.code
+
+# 問題4: 未処理の非HTTPExceptionをJSONで返す
 @app.errorhandler(Exception)
 def handle_exception(e):
     import traceback
     app.logger.error(traceback.format_exc())
     return jsonify({"error": "サーバーエラーが発生しました"}), 500
-
-
-@app.errorhandler(404)
-def handle_404(e):
-    return jsonify({"error": "Not found"}), 404
 
 
 # ── DB接続 ───────────────────────────────
@@ -246,9 +248,12 @@ def create_item():
     data = request.get_json(force=True)
     name = (data.get("name") or "").strip()
     unit = (data.get("unit") or "個").strip()
-    stock = int(data.get("current_stock") or 0)
-    default_avg = float(data.get("default_weekly_avg") or 0)
-    # bug8: 在庫数の負数バリデーション
+    # bug22: 型変換エラーを400で返す
+    try:
+        stock = int(data.get("current_stock") or 0)
+        default_avg = float(data.get("default_weekly_avg") or 0)
+    except (ValueError, TypeError):
+        return jsonify({"error": "数値の形式が不正です"}), 400
     if not name:
         return jsonify({"error": "品名は必須です"}), 400
     if stock < 0:
@@ -307,7 +312,11 @@ def create_transaction():
     data = request.get_json(force=True)
     item_id = (data.get("item_id") or "").strip()
     tx_type = (data.get("type") or "").strip()
-    quantity = int(data.get("quantity") or 0)
+    # bug22: 型変換エラーを400で返す
+    try:
+        quantity = int(data.get("quantity") or 0)
+    except (ValueError, TypeError):
+        return jsonify({"error": "数量の形式が不正です"}), 400
     staff_name = (data.get("staff_name") or "").strip()
     note = (data.get("note") or "").strip()
 

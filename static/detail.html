@@ -131,7 +131,7 @@ async function saveDefaultAvg() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ default_weekly_avg: val }),
   });
-  if (!res.ok) { alert("保存に失敗しました"); return; }
+  if (!res.ok) { const d = await res.json(); alert(d.error || "保存に失敗しました"); return; }
   const btn = document.getElementById("btn-save-avg");
   btn.textContent = "✓ 保存済み";
   setTimeout(() => { btn.textContent = "保存"; }, 2000);
@@ -184,7 +184,8 @@ function exportCSV() {
   const safeName = displayName.replace(/[\\/:*?"<>|()（）]/g, "_");
   a.download = `${safeName}_受払履歴_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
-  URL.revokeObjectURL(url);
+  // 非同期ダウンロードが完了してから解放（早すぎると一部ブラウザで失敗）
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function escHtml(str) {

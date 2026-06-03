@@ -182,8 +182,9 @@ document.getElementById("btn-open-add-item").addEventListener("click", () => {
 async function submitAddItem() {
   const name = document.getElementById("new-item-name").value.trim();
   const unit = document.getElementById("new-item-unit").value.trim() || "個";
-  const stock = parseInt(document.getElementById("new-item-stock").value || "0");
-  const defaultAvg = parseFloat(document.getElementById("new-item-avg").value || "0");
+  // bug25: スペースのみ入力でNaNになるのを防ぐ
+  const stock = parseInt(document.getElementById("new-item-stock").value.trim() || "0") || 0;
+  const defaultAvg = parseFloat(document.getElementById("new-item-avg").value.trim() || "0") || 0;
   if (!name) { alert("品名を入力してください"); return; }
   const res = await fetch("/api/items", {
     method: "POST",
