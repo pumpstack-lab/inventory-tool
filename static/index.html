@@ -48,6 +48,22 @@
       <button class="type-btn" id="type-out" onclick="setTxType('out')">📤 払出（払）</button>
     </div>
     <div class="form-group">
+      <label class="form-label">日付</label>
+      <input type="date" class="form-input" id="tx-date" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">ホーム</label>
+      <select class="form-select" id="tx-home">
+        <option value="">選択してください</option>
+        <option value="こもれびホーム３−２">こもれびホーム３−２</option>
+        <option value="こもれびホーム４">こもれびホーム４</option>
+        <option value="こもれびホーム５−１">こもれびホーム５−１</option>
+        <option value="こもれびホーム５−２">こもれびホーム５−２</option>
+        <option value="こもれびホーム６">こもれびホーム６</option>
+        <option value="こもれびホームMAHARO">こもれびホームMAHARO</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label class="form-label">数量</label>
       <input type="number" class="form-input" id="tx-qty" min="1" value="1" />
     </div>

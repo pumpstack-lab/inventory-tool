@@ -103,11 +103,21 @@ function openTx(itemId) {
   document.getElementById("tx-modal-title").textContent = `受払登録：${item?.name || ""}`;
   document.getElementById("tx-qty").value = 1;
   document.getElementById("tx-note").value = "";
+  // 日付を当日にデフォルト設定
+  document.getElementById("tx-date").value = fmtDateToday();
   txType = "out";
   selectedStaff = "";
   renderTypeButtons();
   renderStaffChips("staff-chips-tx");
   openModal("modal-tx");
+}
+
+function fmtDateToday() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 // bug1: 関数名を setTxType に変更（変数名 txType と競合しない）
@@ -151,6 +161,8 @@ async function submitTx() {
     if (!confirm("担当者が選択されていません。このまま登録しますか？")) return;
   }
 
+  const transaction_date = document.getElementById("tx-date").value.trim();
+  const home_name = document.getElementById("tx-home").value;
   const res = await fetch("/api/transactions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -159,6 +171,8 @@ async function submitTx() {
       type: txType,
       quantity: qty,
       staff_name: selectedStaff,
+      home_name,
+      transaction_date,
       note,
     }),
   });

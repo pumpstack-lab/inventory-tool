@@ -55,7 +55,9 @@
       <table class="history-table">
         <thead>
           <tr>
-            <th>日時</th>
+            <th>日付</th>
+            <th>登録日時</th>
+            <th>ホーム</th>
             <th>区分</th>
             <th>数量</th>
             <th>担当者</th>
@@ -151,8 +153,11 @@ function renderTable() {
       ? `<span class="tx-in">+${tx.quantity}</span>`
       : `<span class="tx-out">-${tx.quantity}</span>`;
     const dt = tx.recorded_at.slice(0, 16).replace("T", " ");
+    const txDate = tx.transaction_date || tx.recorded_at.slice(0, 10);
     return `<tr>
+      <td style="white-space:nowrap">${txDate}</td>
       <td style="white-space:nowrap">${dt}</td>
+      <td>${escHtml(tx.home_name || "―")}</td>
       <td>${typeLabel}</td>
       <td>${qty}</td>
       <td>${escHtml(tx.staff_name || "―")}</td>
@@ -164,10 +169,12 @@ function renderTable() {
 function exportCSV() {
   const name = itemInfo?.name || "item";
   const unit = itemInfo?.unit || "";
-  const rows = [["日時", "区分", `数量(${unit})`, "担当者", "メモ"]];
+  const rows = [["日付", "登録日時", "ホーム", "区分", `数量(${unit})`, "担当者", "メモ"]];
   txData.forEach(tx => {
     rows.push([
+      tx.transaction_date || tx.recorded_at.slice(0, 10),
       tx.recorded_at.slice(0, 16).replace("T", " "),
+      tx.home_name || "",
       tx.type === "in" ? "入庫" : "払出",
       tx.type === "in" ? tx.quantity : -tx.quantity,
       tx.staff_name || "",

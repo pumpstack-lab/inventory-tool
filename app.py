@@ -139,6 +139,8 @@ def init_db():
             type TEXT NOT NULL,
             quantity INTEGER NOT NULL,
             staff_name TEXT NOT NULL DEFAULT '',
+            home_name TEXT NOT NULL DEFAULT '',
+            transaction_date TEXT NOT NULL DEFAULT '',
             note TEXT,
             recorded_at TEXT NOT NULL
         )""")
@@ -149,6 +151,7 @@ def init_db():
             created_at TEXT NOT NULL
         )""")
         ensure_items_columns(c)
+        ensure_transactions_columns(c)
         count = c.fetchone("SELECT COUNT(*) FROM items")["count"]
         if count == 0:
             now = datetime.now().isoformat(timespec="seconds")
@@ -160,6 +163,17 @@ def init_db():
                 "INSERT INTO items (id,name,current_stock,unit,default_weekly_avg,sort_order,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 rows,
             )
+
+
+def ensure_transactions_columns(c: PGWrapper) -> None:
+    """既存DBのtransactionsにhome_name・transaction_dateを追加。"""
+    cols = {r["column_name"] for r in c.fetchall(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='transactions'"
+    )}
+    if "home_name" not in cols:
+        c.run("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS home_name TEXT NOT NULL DEFAULT ''")
+    if "transaction_date" not in cols:
+        c.run("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS transaction_date TEXT NOT NULL DEFAULT ''")
 
 
 def ensure_items_columns(c: PGWrapper) -> None:
@@ -318,16 +332,21 @@ def create_transaction():
     except (ValueError, TypeError):
         return jsonify({"error": "数量の形式が不正です"}), 400
     staff_name = (data.get("staff_name") or "").strip()
+    home_name = (data.get("home_name") or "").strip()
+    transaction_date = (data.get("transaction_date") or "").strip()
     note = (data.get("note") or "").strip()
 
     if not item_id or tx_type not in ("in", "out") or quantity <= 0:
         return jsonify({"error": "入力内容が不正です"}), 400
 
+    # transaction_dateが空の場合は当日をセット
+    if not transaction_date:
+        transaction_date = datetime.now().strftime("%Y-%m-%d")
+
     now = datetime.now().isoformat(timespec="seconds")
     tid = str(uuid.uuid4())
 
     with conn() as c:
-        # 同時アクセス競合対策: FOR UPDATE で行ロック取得
         item = c.fetchone(
             "SELECT * FROM items WHERE id=%s AND active=1 FOR UPDATE",
             (item_id,),
@@ -338,8 +357,10 @@ def create_transaction():
         if new_stock < 0:
             return jsonify({"error": f"在庫が不足しています（現在庫: {item['current_stock']}{item['unit']}）"}), 400
         c.run(
-            "INSERT INTO transactions (id,item_id,type,quantity,staff_name,note,recorded_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (tid, item_id, tx_type, quantity, staff_name, note, now),
+            """INSERT INTO transactions
+               (id,item_id,type,quantity,staff_name,home_name,transaction_date,note,recorded_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (tid, item_id, tx_type, quantity, staff_name, home_name, transaction_date, note, now),
         )
         c.run("UPDATE items SET current_stock=%s WHERE id=%s", (new_stock, item_id))
     return jsonify({"id": tid, "new_stock": new_stock})
